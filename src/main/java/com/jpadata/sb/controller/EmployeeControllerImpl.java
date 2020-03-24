@@ -6,9 +6,19 @@ import java.util.HashMap;
 import java.util.List;
 //import java.util.Optional;
 import java.util.Map;
+import java.util.stream.Collectors;
+
+import javax.persistence.Entity;
 
 import org.dozer.DozerBeanMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.ResponseEntity.BodyBuilder;
 import org.springframework.validation.annotation.Validated;
@@ -19,29 +29,46 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.RestTemplate;
 
 import com.jpadata.sb.dto.EmployeeDto;
 import com.jpadata.sb.exception.ResponseNotFoundException;
 import com.jpadata.sb.model.Employee;
 import com.jpadata.sb.repository.EmployeeRepository;
+import com.netflix.hystrix.contrib.javanica.annotation.HystrixCommand;
+import com.netflix.hystrix.contrib.javanica.annotation.HystrixProperty;
 
 @RestController 
 @RequestMapping(value="/api/v1")
 public class EmployeeControllerImpl implements EmployeeController {
+	
+	Logger log= LoggerFactory.getLogger(EmployeeControllerImpl.class);
 
 	@Autowired
 	public EmployeeRepository employeeRepository;
+	
+	@Autowired
+	RestTemplate restTemplate;
 
 	@Autowired
 	DozerBeanMapper dozerMapper;
+	
+	@Value("${server.port}")
+	String serverPort;
 
+	
 	@Override
 	@GetMapping("/employees")
+	@HystrixCommand(fallbackMethod="fallback_empl",commandProperties= {
+			@HystrixProperty(name = "execution.isolation.thread.timeoutInMilliseconds", value = "1000")
+	})
 	public List<EmployeeDto> getAllEmployees() {
 		List<Employee> resultDB = employeeRepository.findAll();
-		EmployeeDto finalResult = dozerMapper.map(resultDB,EmployeeDto.class);
-		List<EmployeeDto> res= new ArrayList<>(Arrays.asList(finalResult));
+		List<EmployeeDto> res= resultDB.stream()
+				.map(data->dozerMapper.map(data,EmployeeDto.class))
+				.collect(Collectors.toList());
 		return res; 
 	}
 
@@ -65,8 +92,10 @@ public class EmployeeControllerImpl implements EmployeeController {
 	@PostMapping("/employees")
 	public EmployeeDto createEmployee(@RequestBody Employee employee) {
 
-		Employee resultdb = this.employeeRepository.save(employee);
+		Employee resultdb = employeeRepository.save(employee);
+		System.out.println("Result from db "+resultdb);
 		EmployeeDto result = dozerMapper.map(resultdb,EmployeeDto.class);
+		System.out.println(result);
 		return result;
 	}
 
@@ -102,4 +131,27 @@ public class EmployeeControllerImpl implements EmployeeController {
     }   
 
 
+	@RequestMapping(value="/template/emp")
+	public String getEmployeeList()
+	{
+		HttpHeaders header= new HttpHeaders();
+		header.setAccept(Arrays.asList(MediaType.APPLICATION_JSON));
+		HttpEntity<String> entity=new HttpEntity<String>(header);
+		//return restTemplate.exchange("http://localhost:8082/api/v1/employees/1",HttpMethod.GET,entity,String.class).getBody();
+		return restTemplate.exchange("http://localhost:"+serverPort+"/api/v1/employees/1",HttpMethod.GET,entity,String.class).getBody();
+	}
+	
+	@RequestMapping(value="/template/updateEmp/{id}",method=RequestMethod.PUT)
+	public String updateEmployeesTemplate(@RequestBody EmployeeDto emp,@PathVariable("id") String id)
+	{
+		HttpHeaders header= new HttpHeaders();
+		header.setAccept(Arrays.asList(MediaType.APPLICATION_JSON));
+	HttpEntity<EmployeeDto> entity= new HttpEntity<EmployeeDto>(emp,header);
+	return restTemplate.exchange("http://localhost:"+serverPort+"/api/v1/employees/"+id,HttpMethod.PUT,entity,String.class).getBody();
+	
+	}
+	
+	private List<EmployeeDto> fallback_empl() {
+		   return new ArrayList<EmployeeDto>();
+		}
 }
